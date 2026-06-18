@@ -1,0 +1,223 @@
+# =============================================================
+# Лабораторная работа: Ансамбли моделей МО. Часть 2.
+# Датасет: Titanic (задача классификации)
+# Модели: Стекинг, MLP (многослойный персептрон), МГУА (доп.)
+# =============================================================
+
+# ШАГ 1: Установка дополнительных библиотек
+# Раскомментируйте и запустите эту ячейку ПЕРВОЙ в Colab:
+# !pip install gmdh
+
+# =============================================================
+# ШАГ 2: Импорт библиотек
+# =============================================================
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import accuracy_score, classification_report
+
+# Модели-базовые ученики для стекинга
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+
+# Стекинг
+from sklearn.ensemble import StackingClassifier
+
+# Многослойный персептрон
+from sklearn.neural_network import MLPClassifier
+
+RANDOM_STATE = 42
+
+# =============================================================
+# ШАГ 3: Загрузка датасета
+# =============================================================
+url = "https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv"
+df = pd.read_csv(url)
+
+print("=== Первые 5 строк ===")
+print(df.head())
+print("\n=== Пропущенные значения ===")
+print(df.isnull().sum())
+
+# =============================================================
+# ШАГ 4: Предобработка данных
+# =============================================================
+df = df[['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked']]
+
+df['Age'].fillna(df['Age'].median(), inplace=True)
+df['Embarked'].fillna(df['Embarked'].mode()[0], inplace=True)
+
+le = LabelEncoder()
+df['Sex']      = le.fit_transform(df['Sex'])
+df['Embarked'] = le.fit_transform(df['Embarked'])
+
+print("\n=== Данные после обработки ===")
+print(df.head())
+print("\nПропуски после заполнения:", df.isnull().sum().sum())
+
+# =============================================================
+# ШАГ 5: Разделение выборки
+# =============================================================
+X = df.drop('Survived', axis=1)
+y = df['Survived']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=RANDOM_STATE
+)
+
+# Масштабирование признаков (важно для MLP и стекинга с SVM)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled  = scaler.transform(X_test)
+
+print(f"\nОбучающая выборка: {X_train.shape[0]} примеров")
+print(f"Тестовая выборка:  {X_test.shape[0]} примеров")
+
+# =============================================================
+# ШАГ 6: Модель 1 — Стекинг (Stacking)
+# =============================================================
+# Базовые (уровень 0) модели
+base_estimators = [
+    ('rf',  RandomForestClassifier(n_estimators=50, random_state=RANDOM_STATE)),
+    ('gb',  GradientBoostingClassifier(n_estimators=50, random_state=RANDOM_STATE)),
+    ('svm', SVC(probability=True, random_state=RANDOM_STATE)),
+]
+
+# Мета-модель (уровень 1)
+meta_model = LogisticRegression(random_state=RANDOM_STATE)
+
+stacking_model = StackingClassifier(
+    estimators=base_estimators,
+    final_estimator=meta_model,
+    cv=5,               # 5-fold cross-validation для генерации мета-признаков
+    passthrough=False   # не передаём исходные признаки в мета-модель
+)
+
+stacking_model.fit(X_train_scaled, y_train)
+y_pred_stacking = stacking_model.predict(X_test_scaled)
+acc_stacking = accuracy_score(y_test, y_pred_stacking)
+print(f"\n=== Стекинг ===")
+print(f"Accuracy = {acc_stacking:.4f}")
+print(classification_report(y_test, y_pred_stacking))
+
+# =============================================================
+# ШАГ 7: Модель 2 — MLP (Многослойный персептрон)
+# =============================================================
+mlp_model = MLPClassifier(
+    hidden_layer_sizes=(64, 32),   # два скрытых слоя: 64 и 32 нейрона
+    activation='relu',             # функция активации ReLU
+    solver='adam',                 # оптимизатор Adam
+    max_iter=300,
+    random_state=RANDOM_STATE
+)
+
+mlp_model.fit(X_train_scaled, y_train)
+y_pred_mlp = mlp_model.predict(X_test_scaled)
+acc_mlp = accuracy_score(y_test, y_pred_mlp)
+print(f"\n=== Многослойный персептрон (MLP) ===")
+print(f"Accuracy = {acc_mlp:.4f}")
+print(classification_report(y_test, y_pred_mlp))
+
+# =============================================================
+# ШАГ 8: Модель 3 — МГУА (дополнительное задание)
+# =============================================================
+# ВНИМАНИЕ: библиотека gmdh работает только для регрессии!
+# Поэтому для сравнения применяем её к регрессионной постановке,
+# а затем округляем результат до 0/1 (порог 0.5).
+
+try:
+    import gmdh
+    from gmdh import Combi, Mia
+
+    X_train_np = np.array(X_train_scaled)
+    X_test_np  = np.array(X_test_scaled)
+    y_train_np = np.array(y_train, dtype=float)
+    y_test_np  = np.array(y_test,  dtype=float)
+
+    # --- МГУА COMBI (линейный метод) ---
+    combi_model = Combi()
+    combi_model.fit(X_train_np, y_train_np)
+    y_pred_combi_raw = combi_model.predict(X_test_np)
+    y_pred_combi = (y_pred_combi_raw >= 0.5).astype(int)
+    acc_combi = accuracy_score(y_test_np, y_pred_combi)
+    print(f"\n=== МГУА COMBI (линейный) ===")
+    print(f"Accuracy = {acc_combi:.4f}")
+
+    # --- МГУА MIA (нелинейный метод) ---
+    mia_model = Mia()
+    mia_model.fit(X_train_np, y_train_np)
+    y_pred_mia_raw = mia_model.predict(X_test_np)
+    y_pred_mia = (y_pred_mia_raw >= 0.5).astype(int)
+    acc_mia = accuracy_score(y_test_np, y_pred_mia)
+    print(f"\n=== МГУА MIA (нелинейный) ===")
+    print(f"Accuracy = {acc_mia:.4f}")
+
+    gmdh_available = True
+
+except ImportError:
+    print("\n[INFO] Библиотека gmdh не установлена.")
+    print("Для установки выполните: !pip install gmdh")
+    print("Результаты МГУА в сравнение не включены.")
+    acc_combi = None
+    acc_mia   = None
+    gmdh_available = False
+
+# =============================================================
+# ШАГ 9: Итоговое сравнение моделей
+# =============================================================
+models = ['Стекинг', 'MLP']
+accs   = [acc_stacking, acc_mlp]
+
+if gmdh_available:
+    models += ['МГУА COMBI', 'МГУА MIA']
+    accs   += [acc_combi, acc_mia]
+
+results = pd.DataFrame({'Модель': models, 'Accuracy': accs})
+results = results.sort_values('Accuracy', ascending=False).reset_index(drop=True)
+
+print("\n=== Итоговое сравнение ===")
+print(results.to_string(index=False))
+
+# =============================================================
+# ШАГ 10: Визуализация
+# =============================================================
+colors = ['#2196F3', '#FF9800', '#4CAF50', '#9C27B0'][:len(models)]
+
+plt.figure(figsize=(9, 5))
+bars = plt.bar(results['Модель'], results['Accuracy'],
+               color=colors, edgecolor='black', width=0.5)
+
+for bar, val in zip(bars, results['Accuracy']):
+    plt.text(bar.get_x() + bar.get_width()/2,
+             bar.get_height() + 0.004,
+             f'{val:.4f}', ha='center', va='bottom',
+             fontsize=11, fontweight='bold')
+
+plt.ylim(0.70, 0.90)
+plt.title('Сравнение моделей. Часть 2 (Titanic)', fontsize=14, fontweight='bold')
+plt.ylabel('Accuracy', fontsize=12)
+plt.xlabel('Модель', fontsize=12)
+plt.tight_layout()
+plt.savefig('lab2_comparison.png', dpi=150)
+plt.show()
+print("График сохранён как lab2_comparison.png")
+
+# =============================================================
+# ШАГ 11: График кривой потерь MLP (Loss Curve)
+# =============================================================
+plt.figure(figsize=(8, 4))
+plt.plot(mlp_model.loss_curve_, color='darkorange', linewidth=2)
+plt.title('Кривая обучения MLP (функция потерь)', fontsize=13, fontweight='bold')
+plt.xlabel('Итерации', fontsize=11)
+plt.ylabel('Loss', fontsize=11)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig('mlp_loss_curve.png', dpi=150)
+plt.show()
+print("График кривой обучения сохранён как mlp_loss_curve.png")
